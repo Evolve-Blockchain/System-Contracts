@@ -5,22 +5,21 @@ contract Params {
     bool public initialized;
 
     // System contracts
-    address
-        public constant ValidatorContractAddr = payable(0x000000000000000000000000000000000000f000);
+    address payable
+        public  constant ValidatorContractAddr = payable(0x000000000000000000000000000000000000f000);
     address
         public constant PunishContractAddr = 0x000000000000000000000000000000000000F001;
     address
         public constant ProposalAddr = 0x000000000000000000000000000000000000F002;
 
     // System params
-    uint16 public constant MaxValidators = 21;
+    uint16 public  MaxValidators = 1000;
     // Validator have to wait StakingLockPeriod blocks to withdraw staking
     uint64 public constant StakingLockPeriod = 86400;
     // Validator have to wait WithdrawProfitPeriod blocks to withdraw his profits
     //uint64 public constant WithdrawProfitPeriod = 28800;
-    uint256 public constant MinimalStakingCoin = 32 ether;
-
-    uint256 public constant minimumValidatorStaking = 10000 * 1e18;
+    uint256 public MinimalStakingCoin = 32 ether;
+    uint256 public minimumValidatorStaking = 1000000 ether;
 
     modifier onlyMiner() {
         require(msg.sender == block.coinbase, "Miner only");
