@@ -51,6 +51,7 @@ interface InterfaceValidator {
         returns (bool);
 
     function withdrawProfits(address validator) external returns (bool);
+    function getActiveValidators() external view returns(address[] memory);
 }
 
 
@@ -160,20 +161,33 @@ abstract contract Ownable is Context {
 contract ValidatorHelper is Ownable {
 
     InterfaceValidator public valContract = InterfaceValidator(0x000000000000000000000000000000000000f000);
-    uint256 public minimumValidatorStaking = 10000 * 1e18;
-    uint256 public lastRewardedBlock ;
-    uint256 public extraRewardsPerBlock = 4 * 1e18;
+    uint256 public minimumValidatorStaking = 10000  * 1e18;
+    uint256 public lastRewardedHour = block.timestamp;
+    uint256 public extraRewardsPerHour ;
     uint256 public rewardFund;
+    uint256 hourtime =  3600;
     mapping(address=>uint256) public rewardBalance;
+    mapping(address=>address) public rewardWallet;
     mapping(address=>uint256) public totalProfitWithdrawn;
+    enum KYCStatus
+    {
+        rejected,
+        approved,
+        requested
+    }
+    mapping(address=>KYCStatus) public userKYC;
+
 
     //events
     event Stake(address validator, uint256 amount, uint256 timestamp);
     event Unstake(address validator, uint256 timestamp);
     event WithdrawProfit(address validator, uint256 amount, uint256 timestamp);
+    event KYCRequest(address indexed validatoradd);
+    event KYCApprove(address indexed validatoradd, bool status);
 
     receive() external payable {
         rewardFund += msg.value;
+        extraRewardsPerHour = msg.value / (365 * 24);
     }
 
 
@@ -185,7 +199,7 @@ contract ValidatorHelper is Ownable {
         string calldata email,
         string calldata details
     ) external payable  returns (bool) {
-
+        require(userKYC[msg.sender]==KYCStatus.approved,"User's KYC has not been approved");
         _distributeRewards();
 
         require(msg.value >= minimumValidatorStaking, "Please stake minimum validator staking" );
@@ -202,6 +216,7 @@ contract ValidatorHelper is Ownable {
         external
         returns (bool)
     {
+      require(userKYC[validator]==KYCStatus.approved,"Validator's KYC has not been approved");
         _distributeRewards();
 
         valContract.unstake(validator);
@@ -211,6 +226,7 @@ contract ValidatorHelper is Ownable {
     }
 
     function withdrawStakingReward(address validator) external {
+        require(userKYC[validator]==KYCStatus.approved,"Validator's KYC has not been approved");
         require(validator == tx.origin, "caller should be real validator");
         uint256 hbincoming = valContract.viewStakeReward(validator, validator);
         uint256 blockRewards = viewValidatorRewards(validator);
@@ -225,9 +241,17 @@ contract ValidatorHelper is Ownable {
             rewardFund -= blockRewards;
             rewardBalance[validator] = blockRewards;
             totalProfitWithdrawn[validator] += blockRewards;
-            payable(validator).transfer(blockRewards);
-            emit WithdrawProfit( validator,  blockRewards,  block.timestamp);
+            payable(rewardWallet[validator]).transfer(blockRewards);
+            emit WithdrawProfit( rewardWallet[validator],  blockRewards,  block.timestamp);
         }
+    }
+
+    function requestKYC(address _rewardWallet) external{
+        require(userKYC[msg.sender]==KYCStatus.rejected,"Already requested or approved");
+        require(_rewardWallet != address(0), "Invalid address");
+        userKYC[msg.sender] = KYCStatus.requested;
+        rewardWallet[msg.sender] = _rewardWallet;
+        emit KYCRequest(msg.sender);
     }
 
     function viewValidatorRewards(address validator) public view returns(uint256 rewardAmount){
@@ -244,13 +268,14 @@ contract ValidatorHelper is Ownable {
         // if this smart contract has enough fund and if this validator is not unstaked,
         // then he will receive the block rewards.
         // block reward is dynamically calculated based on total blocks mined
-        if(rewardFund >= extraRewardsPerBlock && address(this).balance > extraRewardsPerBlock && validatorStatus != InterfaceValidator.Status.Unstaked){
-            address[] memory highestValidatorsSet = valContract.getTopValidators();
+        if(rewardFund >= extraRewardsPerHour && address(this).balance > extraRewardsPerHour && validatorStatus != InterfaceValidator.Status.Unstaked){
+            address[] memory activeValidatorsSet = valContract.getActiveValidators();
 
-            uint256 totalValidators = highestValidatorsSet.length;
-
-            if(block.number - lastRewardedBlock >= totalValidators ){
-                rewardAmount = (block.number - lastRewardedBlock) * extraRewardsPerBlock / totalValidators;
+            uint256 totalValidators = activeValidatorsSet.length;
+            uint256 rewtime = block.timestamp - lastRewardedHour;
+            rewtime = rewtime / hourtime;
+            if(rewtime >= 0 ){
+                rewardAmount = (rewtime * extraRewardsPerHour) / totalValidators;
             }
         }
 
@@ -259,15 +284,16 @@ contract ValidatorHelper is Ownable {
 
     function _distributeRewards() internal {
 
-        address[] memory highestValidatorsSet = valContract.getTopValidators();
-        uint256 totalValidators = highestValidatorsSet.length;
-
+        address[] memory activeValidatorsSet = valContract.getActiveValidators();
+        uint256 totalValidators = activeValidatorsSet.length;
+        uint256 rewtime = block.timestamp - lastRewardedHour;
+            rewtime = rewtime / hourtime;
         for(uint8 i=0; i < totalValidators; i++){
 
-            rewardBalance[highestValidatorsSet[i]] = viewValidatorRewards(highestValidatorsSet[i]);
+            rewardBalance[activeValidatorsSet[i]] = viewValidatorRewards(activeValidatorsSet[i]);
 
         }
-        lastRewardedBlock = block.number;
+        lastRewardedHour += rewtime * hourtime;
 
     }
 
@@ -280,6 +306,19 @@ contract ValidatorHelper is Ownable {
     }
     function changeMinimumValidatorStaking(uint256 amount) external onlyOwner{
         minimumValidatorStaking = amount;
+    }
+    function approveKYC(address validatoradd, bool status) external onlyOwner
+    {
+        require(userKYC[validatoradd]==KYCStatus.requested,"KYC not requested");
+        if(status)
+        {
+            userKYC[validatoradd] = KYCStatus.approved;
+        }
+        else
+        {
+            userKYC[validatoradd] = KYCStatus.rejected;
+        }
+        emit KYCApprove(validatoradd, status);
     }
 
     /**
@@ -401,4 +440,4 @@ contract ValidatorHelper is Ownable {
         //this function is for UI compatibility
         return true;
     }
-} 
+}

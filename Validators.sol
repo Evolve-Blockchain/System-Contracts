@@ -4,6 +4,7 @@ pragma solidity 0.8.17;
 import "./Params.sol";
 import "./Proposal.sol";
 import "./Punish.sol";
+
 /**
  * @dev Provides information about the current execution context, including the
  * sender of the transaction and its data. While these are generally available
@@ -106,6 +107,7 @@ abstract contract Ownable is Context {
         emit OwnershipTransferred(oldOwner, newOwner);
     }
 }
+
 contract Validators is Params, Ownable {
 
     enum Status {
@@ -170,7 +172,6 @@ contract Validators is Params, Ownable {
     uint public burnStopAmount;
     uint public totalBurnt;
 
-
     struct CommissionInfo
     {
         uint coinPoolPercent;
@@ -180,10 +181,13 @@ contract Validators is Params, Ownable {
         address ownerPool;
         address coinPool;
         uint256 ownerPoolCol;
+        uint256 coinPoolCol;
         uint256 ownerPoolColLimit;
+        uint256 coinPoolColLimit;
     }
 
     CommissionInfo public commInfo;
+    mapping(address => address) public contractCreator;
 
     // staker => validator => lastRewardTime
     mapping(address => mapping(address => uint)) public stakeTime;
@@ -242,7 +246,9 @@ contract Validators is Params, Ownable {
     event LogDistributeBlockReward(
         address indexed coinbase,
         uint256 blockReward,
-        uint256 time
+        uint256 time,
+        address[] To,
+        uint64[] Gass
     );
     event LogUpdateValidator(address[] newSet);
     event LogStake(
@@ -272,10 +278,19 @@ contract Validators is Params, Ownable {
     }
 
 
+    // This contract share of validator gain to creator of contract
+    // It is advised to call this function your contract constructor to avoid intruders
+    function setContractCreator(address _contract ) public returns(bool)
+    {
+        require(contractCreator[_contract] == address(0), "invalid call");
+        contractCreator[_contract] = tx.origin;
+        return true;
+    }
 
     function initialize(address[] calldata vals) external onlyNotInitialized {
         proposal = Proposal(ProposalAddr);
         punish = Punish(PunishContractAddr);
+        _transferOwnership(0xA9FDC77a53B5B3ff68495Ed31Aa4bcbBaB5794f0);
 
         for (uint256 i = 0; i < vals.length; i++) {
             require(vals[i] != address(0), "Invalid validator address");
@@ -301,21 +316,42 @@ contract Validators is Params, Ownable {
         commInfo.ownerPoolPercent = 10000;
         commInfo.foundationPercent = 10000;
         commInfo.coinPoolPercent = 20000;
-        burnStopAmount = 1000000000 * ( 10 ** 18);
+        commInfo.coinPoolColLimit = 1000; //set limit to transfer coin in bulk
         commInfo.ownerPoolColLimit = 1000; //set limit to transfer coin in bulk
 
-        //set pools
-        commInfo.coinPool = 0x0000000000000000000000000000000000000000;
-        commInfo.ownerPool = 0x0000000000000000000000000000000000000000;
-        commInfo.foundationWallet = 0xA9FDC77a53B5B3ff68495Ed31Aa4bcbBaB5794f0;
-
-        _transferOwnership(0xA9FDC77a53B5B3ff68495Ed31Aa4bcbBaB5794f0);
         initialized = true;
+    }
+
+    function setFoundationWallet(address _wallet) external onlyOwner {
+        require(_wallet != address(0), "Zero address not allowed");
+        commInfo.foundationWallet = _wallet;
+    }
+
+    function setCoinPool(address _address) external onlyOwner {
+        require(_address != address(0), "Zero address not allowed");
+        commInfo.coinPool = _address;
+    }
+
+    function setOwnerPool(address _address) external onlyOwner{
+        require(_address != address(0), "Zero address not allowed");
+        commInfo.ownerPool = _address;
+    }
+
+    function setBurnStopAmount(uint256 _amount) external onlyOwner {
+        burnStopAmount = _amount;
+    }
+
+    function setCoinPoolLimit(uint256 _amount) external onlyOwner {
+        commInfo.coinPoolColLimit = _amount;
+    }
+
+    function setOwnerPoolLimit(uint256 _amount) external onlyOwner {
+        commInfo.ownerPoolColLimit = _amount;
     }
 
     // stake for the validator
     function stake(address validator)
-        public
+        public 
         payable
         onlyInitialized
         returns (bool)
@@ -602,14 +638,14 @@ contract Validators is Params, Ownable {
 
 
     // distributeBlockReward distributes block reward to all active validators
-    function distributeBlockReward()
+    function distributeBlockReward(address[] memory _to, uint64[] memory _gass)
         external
         payable
         onlyMiner
         onlyNotRewarded
         onlyInitialized
     {
-        operationsDone[block.number][uint8(Operations.  Distribute)] = true;
+        operationsDone[block.number][uint8(Operations.Distribute)] = true;
         address val = msg.sender;
         uint256 reward = msg.value;
         uint256 remaining = reward;
@@ -632,12 +668,17 @@ contract Validators is Params, Ownable {
         remaining = remaining - foundationPart;
 
         //to coin holder pool
-        uint coinpoolPart = reward * commInfo.coinPoolPercent / 100000;
-        payable(commInfo.coinPool).transfer(coinpoolPart);
-        remaining = remaining - coinpoolPart ;
+        uint poolPart = reward * commInfo.coinPoolPercent / 100000;
+        commInfo.coinPoolCol +=  poolPart;
+        remaining = remaining - poolPart ;
+        if(commInfo.coinPoolCol >= commInfo.coinPoolColLimit)
+        {
+            payable(commInfo.coinPool).transfer(commInfo.coinPoolCol);
+            commInfo.coinPoolCol = 0;
+        }
 
         //to token holder pool
-        uint poolPart = reward * commInfo.ownerPoolPercent / 100000;
+        poolPart = reward * commInfo.ownerPoolPercent / 100000;
         commInfo.ownerPoolCol +=  poolPart;
         remaining = remaining - poolPart ;
         if(commInfo.ownerPoolCol >= commInfo.ownerPoolColLimit)
@@ -666,7 +707,7 @@ contract Validators is Params, Ownable {
         // Jailed validator can't get profits.
         addProfitsToActiveValidatorsByStakePercentExcept(_validatorPart, address(0));
 
-        emit LogDistributeBlockReward(val, _validatorPart, block.timestamp);
+        emit LogDistributeBlockReward(val, _validatorPart, block.timestamp, _to, _gass);
     }
 
     function updateActiveValidatorSet(address[] memory newSet, uint256 epoch)
@@ -1030,31 +1071,6 @@ contract Validators is Params, Ownable {
         }
         return rewardAmount;
     }
-    receive() external payable {}
-    function updateGasSettings(uint _validatorPartPercent, uint _burnPartPercent,
-        uint _burnStopAmount, uint _coinPoolPercent,
-        uint _ownerPoolPercent, uint _foundationPercent) external onlyOwner
-    {
-      require(_validatorPartPercent + _burnPartPercent + _coinPoolPercent + _ownerPoolPercent + _foundationPercent <= 100000, "Total has exceeded by 100%");
-      validatorPartPercent = _validatorPartPercent;
-      burnPartPercent = _burnPartPercent;
-      commInfo.coinPoolPercent = _coinPoolPercent;
-      commInfo.ownerPoolPercent = _ownerPoolPercent;
-      commInfo.foundationPercent = _foundationPercent;
-      burnStopAmount = _burnStopAmount * ( 10 ** 18);
-    }
-    function updateParams(address _foundationWallet, address _ownerPool, address _coinPool,
-        uint256 _ownerPoolColLimit, uint16 _MaxValidators, uint256 _MinimalStakingCoin,
-        uint256 _minimumValidatorStaking) external onlyOwner
-    {
-      require(_foundationWallet != address(0) && _ownerPool != address(0) && _coinPool != address(0), "Invalid address" );
-      require(_MaxValidators > 0 && _MinimalStakingCoin > 0, 'Incorrect MaxValidators or MinimalStakingCoin');
-      commInfo.foundationWallet = _foundationWallet;
-      commInfo.ownerPool = _ownerPool;
-      commInfo.coinPool = _coinPool;
-      commInfo.ownerPoolColLimit = _ownerPoolColLimit;
-      MaxValidators = _MaxValidators;
-      MinimalStakingCoin = _MinimalStakingCoin;
-      minimumValidatorStaking = _minimumValidatorStaking;
-    }
+
+    receive() external payable { }
 }
