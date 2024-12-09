@@ -124,11 +124,7 @@ contract OwnerPool is Ownable   {
     receive() external payable {
         rewardFund += msg.value;
         distributerewards();
-    }
-    function getrewardFund() payable external{
-        rewardFund += msg.value;
-        distributerewards();
-    }
+    }   
     address[] public whitelisted; //for tokens
     mapping(address => bool) public blacklisted; // for users
     function addwhitelisted(address _adr) external onlyOwner{

@@ -130,13 +130,7 @@ contract CoinPool is Ownable   {
         if(WEVO != address(0)){
           distributerewards();
         }
-    }
-    function getrewardFund() payable external{
-        rewardFund += msg.value;
-        if(WEVO != address(0)){
-            distributerewards();
-        }
-    }
+    }   
 
     function distributerewards() public
     {
