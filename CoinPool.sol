@@ -121,6 +121,8 @@ contract CoinPool is Ownable   {
     mapping(address => uint256) public claimedRewards;
     //user -- claimed time
     mapping(address => uint256) public lastClaimedtime;
+    mapping(address => uint256) public lastrewardpertoken;
+    mapping(address => bool) public blacklisted;
 
     event claimEV(address indexed _user,uint256 amount, uint256 claimtime);
     receive() external payable {
@@ -131,7 +133,9 @@ contract CoinPool is Ownable   {
     }
     function getrewardFund() payable external{
         rewardFund += msg.value;
-        distributerewards();
+        if(WEVO != address(0)){
+            distributerewards();
+        }
     }
 
     function distributerewards() public
@@ -151,22 +155,43 @@ contract CoinPool is Ownable   {
     function rescue() external onlyOwner{
         payable(msg.sender).transfer(address(this).balance);
     }
+    function setBlacklisted(address user, bool status) external onlyOwner
+    {
+        if(!status && blacklisted[user])
+        {
+            lastClaimedtime[user]=block.timestamp;
+            lastrewardpertoken[user] = rewardpertoken ;
+        }               
+        blacklisted[user] = status;
+    }
     function claim() external
     {
-        uint256 claimable = viewClaimable();
+        uint256 claimable = _claimable(msg.sender);
         claimedRewards[msg.sender] += claimable;
         totalClaimedReward += claimable;
         lastClaimedtime[msg.sender] = block.timestamp;
         IToken(WEVO).deposit{value:claimable}();
-        IToken(WEVO).transfer(msg.sender, claimable);
-        //payable(msg.sender).transfer(claimable);
+        IToken(WEVO).transfer(msg.sender, claimable);        
         emit claimEV(msg.sender, claimable, block.timestamp);
     }
-    function viewClaimable() public view returns(uint256)
+    function _claimable(address user) internal view returns(uint256)
     {
-        require(IToken(WEVO).balanceOf(msg.sender) > 0, "no tokens");
-        require(lastdistributionTime > lastClaimedtime[msg.sender], "No amount to claim");
-        require(rewardsGiven - totalClaimedReward > 0, "No reward remain") ;
-        return ((rewardpertoken * IToken(WEVO).balanceOf(msg.sender))/1e9)   - claimedRewards[msg.sender];
+        require(IToken(WEVO).balanceOf(user) > 0, "no tokens");
+        require(!blacklisted[user],"User has been excluded from rewards");
+        require((lastdistributionTime > lastClaimedtime[user]) && (rewardpertoken - lastrewardpertoken[user]) > 0, "No amount to claim");
+        require(rewardsGiven - totalClaimedReward > 0, "No reward remain") ;        
+        return (((rewardpertoken - lastrewardpertoken[user]) * IToken(WEVO).balanceOf(user))/1e9)   - claimedRewards[user];
+    }
+    function viewRewards(address user) public view returns(uint256)
+    {
+        if(IToken(WEVO).balanceOf(user)>0 && !blacklisted[user] && 
+        ((lastdistributionTime > lastClaimedtime[user]) && 
+        (rewardpertoken - lastrewardpertoken[user]) > 0) &&
+        (rewardsGiven - totalClaimedReward > 0)
+        )
+        {
+            return (((rewardpertoken - lastrewardpertoken[user]) * IToken(WEVO).balanceOf(user))/1e9)   - claimedRewards[user];
+        }   
+        return 0;
     }
 }

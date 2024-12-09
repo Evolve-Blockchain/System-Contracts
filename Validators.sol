@@ -108,6 +108,16 @@ abstract contract Ownable is Context {
     }
 }
 
+interface iValidatorHelper {
+    enum KYCStatus
+    {
+        rejected,
+        approved,
+        requested
+    }
+    function userKYC(address) external view returns(KYCStatus);
+}
+
 contract Validators is Params, Ownable {
 
     enum Status {
@@ -188,6 +198,7 @@ contract Validators is Params, Ownable {
 
     CommissionInfo public commInfo;
     mapping(address => address) public contractCreator;
+    
 
     // staker => validator => lastRewardTime
     mapping(address => mapping(address => uint)) public stakeTime;
@@ -211,38 +222,48 @@ contract Validators is Params, Ownable {
         address indexed fee,
         uint256 time
     );
+    
     event LogEditValidator(
         address indexed val,
         address indexed fee,
         uint256 time
     );
+    
     event LogReactive(address indexed val, uint256 time);
+    
     event LogAddToTopValidators(address indexed val, uint256 time);
+    
     event LogRemoveFromTopValidators(address indexed val, uint256 time);
+    
     event LogUnstake(
         address indexed staker,
         address indexed val,
         uint256 amount,
         uint256 time
     );
+    
     event LogWithdrawStaking(
         address indexed staker,
         address indexed val,
         uint256 amount,
         uint256 time
     );
+    
     event LogWithdrawProfits(
         address indexed val,
         address indexed fee,
         uint256 hb,
         uint256 time
     );
+    
     event LogRemoveValidator(address indexed val, uint256 hb, uint256 time);
+    
     event LogRemoveValidatorIncoming(
         address indexed val,
         uint256 hb,
         uint256 time
     );
+    
     event LogDistributeBlockReward(
         address indexed coinbase,
         uint256 blockReward,
@@ -250,7 +271,9 @@ contract Validators is Params, Ownable {
         address[] To,
         uint64[] Gass
     );
+    
     event LogUpdateValidator(address[] newSet);
+    
     event LogStake(
         address indexed staker,
         address indexed val,
@@ -277,7 +300,8 @@ contract Validators is Params, Ownable {
         _;
     }
 
-
+    address public validatorHelperAdd ;
+ 
     // This contract share of validator gain to creator of contract
     // It is advised to call this function your contract constructor to avoid intruders
     function setContractCreator(address _contract ) public returns(bool)
@@ -290,7 +314,7 @@ contract Validators is Params, Ownable {
     function initialize(address[] calldata vals) external onlyNotInitialized {
         proposal = Proposal(ProposalAddr);
         punish = Punish(PunishContractAddr);
-        _transferOwnership(0xA9FDC77a53B5B3ff68495Ed31Aa4bcbBaB5794f0);
+        _transferOwnership(0xCD11C59441D032fE40e75d44B525E7D92e04D46d);
 
         for (uint256 i = 0; i < vals.length; i++) {
             require(vals[i] != address(0), "Invalid validator address");
@@ -311,6 +335,9 @@ contract Validators is Params, Ownable {
             }
         }
 
+        /*Set the params and gas fee distribution*/
+        _updateParams(1000, 86400, 32 ether, 1000000 ether);
+
         validatorPartPercent = 50000;
         burnPartPercent = 10000;
         commInfo.ownerPoolPercent = 10000;
@@ -320,6 +347,32 @@ contract Validators is Params, Ownable {
         commInfo.ownerPoolColLimit = 1000; //set limit to transfer coin in bulk
 
         initialized = true;
+    }
+
+    function updateGasFeePercentages(
+        uint256 _validatorPartPercent, 
+        uint256 _burnPartPercent,  
+        uint256 _coinPoolPercent,
+        uint256 _ownerPoolPercent,
+        uint256 _foundationPercent
+        ) external onlyOwner {
+            require(_validatorPartPercent + _burnPartPercent + _coinPoolPercent + _ownerPoolPercent + _foundationPercent <= 100000, "Sum of all percentage should not be greater than 100% i.e, 1,00,000");
+            validatorPartPercent = _validatorPartPercent;
+            burnPartPercent = _burnPartPercent;
+            commInfo.coinPoolPercent = _coinPoolPercent;
+            commInfo.ownerPoolPercent = _ownerPoolPercent;
+            commInfo.foundationPercent = _foundationPercent;
+    }
+
+    function updateParams(uint16 _maxValidators, uint64 _stakingLockPeriod, uint256 _minimalStakingCoin, uint256 _minimumValidatorStaking) external onlyOwner{
+        _updateParams(_maxValidators, _stakingLockPeriod, _minimalStakingCoin, _minimumValidatorStaking);
+    }
+
+    function _updateParams(uint16 _maxValidators, uint64 _stakingLockPeriod, uint256 _minimalStakingCoin, uint256 _minimumValidatorStaking) internal{
+        MaxValidators = _maxValidators;
+        StakingLockPeriod = _stakingLockPeriod;
+        MinimalStakingCoin = _minimalStakingCoin;
+        minimumValidatorStaking = _minimumValidatorStaking;
     }
 
     function setFoundationWallet(address _wallet) external onlyOwner {
@@ -347,6 +400,11 @@ contract Validators is Params, Ownable {
 
     function setOwnerPoolLimit(uint256 _amount) external onlyOwner {
         commInfo.ownerPoolColLimit = _amount;
+    }
+
+    function setValidatorHelper(address _address) external onlyOwner{
+        require(_address != address(0), "Zero address not allowed");
+        validatorHelperAdd = _address;
     }
 
     // stake for the validator
@@ -433,6 +491,10 @@ contract Validators is Params, Ownable {
             "Invalid description"
         );
         address payable validator = payable(tx.origin);
+        if(validatorHelperAdd != address(0))
+        {
+            require(iValidatorHelper(validatorHelperAdd).userKYC(tx.origin) == iValidatorHelper.KYCStatus.approved, "User's KYC has not been approved");
+        }
         bool isCreate = false;
         if (validatorInfo[validator].status == Status.NotExist) {
             require(proposal.pass(validator), "You must be authorized first");
@@ -468,12 +530,7 @@ contract Validators is Params, Ownable {
         return true;
     }
 
-    function tryReactive(address validator)
-        external
-        onlyProposalContract
-        onlyInitialized
-        returns (bool)
-    {
+    function tryReactive(address validator) external onlyProposalContract onlyInitialized returns (bool){
         // Only update validator status if Unstaked/Jailed
         if (
             validatorInfo[validator].status != Status.Unstaked &&
@@ -492,11 +549,7 @@ contract Validators is Params, Ownable {
         return true;
     }
 
-    function unstake(address validator)
-        external
-        onlyInitialized
-        returns (bool)
-    {
+    function unstake(address validator) external onlyInitialized returns (bool){
         address staker = tx.origin;
         require(
             validatorInfo[validator].status != Status.NotExist,
@@ -555,8 +608,7 @@ contract Validators is Params, Ownable {
         return true;
     }
 
-    function withdrawStakingReward(address validator) public returns(bool)
-    {
+    function withdrawStakingReward(address validator) public returns(bool){
         require(stakeTime[tx.origin][validator] > 0 , "nothing staked");
         //require(stakeTime[tx.origin][validator] < lastRewardTime[validator], "no reward yet");
         StakingInfo storage stakingInfo = staked[tx.origin][validator];
@@ -571,7 +623,7 @@ contract Validators is Params, Ownable {
         return true;
     }
 
-    function withdrawStaking(address validator) external returns (bool) {
+    function withdrawStaking(address validator) external returns (bool){
         address payable staker = payable(tx.origin);
         StakingInfo storage stakingInfo = staked[staker][validator];
         require(
@@ -598,7 +650,7 @@ contract Validators is Params, Ownable {
     }
 
     // feeAddr can withdraw profits of it's validator
-    function withdrawProfits(address validator) external returns (bool) {
+    function withdrawProfits(address validator) external returns (bool){
         address payable feeAddr = payable(tx.origin);
         require(
             validatorInfo[validator].status != Status.NotExist,
@@ -636,14 +688,9 @@ contract Validators is Params, Ownable {
         return true;
     }
 
-
     // distributeBlockReward distributes block reward to all active validators
-    function distributeBlockReward(address[] memory _to, uint64[] memory _gass)
-        external
-        payable
-        onlyMiner
-        onlyNotRewarded
-        onlyInitialized
+    function distributeBlockReward(address[] memory _to, uint64[] memory _gass) external payable onlyMiner onlyNotRewarded
+    onlyInitialized
     {
         operationsDone[block.number][uint8(Operations.Distribute)] = true;
         address val = msg.sender;

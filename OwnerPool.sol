@@ -118,6 +118,7 @@ contract OwnerPool is Ownable   {
     mapping(address => mapping(address => uint256)) public claimedRewards;
     //token -- user -- claimed time
     mapping(address => mapping(address => uint256)) public lastClaimedtime;
+    mapping(address => mapping(address => uint256)) public lastrewardpertoken;
 
     event claimEV(address indexed _user, address indexed _token, uint256 amount, uint256 claimtime);
     receive() external payable {
@@ -128,7 +129,8 @@ contract OwnerPool is Ownable   {
         rewardFund += msg.value;
         distributerewards();
     }
-    address[] public whitelisted;
+    address[] public whitelisted; //for tokens
+    mapping(address => bool) public blacklisted; // for users
     function addwhitelisted(address _adr) external onlyOwner{
         whitelisted.push(_adr);
     }
@@ -156,24 +158,46 @@ contract OwnerPool is Ownable   {
     function rescue() external onlyOwner{
         payable(msg.sender).transfer(address(this).balance);
     }
-    function claim(address _tokenAddress) external
+    function setBlacklisted(address user, bool status) external onlyOwner
     {
-        //require(IToken(_tokenAddress).balanceOf(msg.sender) > 0, "no tokens");
-        //require(lastdistributionTime[_tokenAddress] > lastClaimedtime[_tokenAddress][msg.sender], "No amount to claim");
-        uint256 claimable = viewClaimable(_tokenAddress);//((rewardpertoken[_tokenAddress] * IToken(_tokenAddress).balanceOf(msg.sender))/1e18)   - claimedRewards[_tokenAddress][msg.sender];
-        claimedRewards[_tokenAddress][msg.sender] += claimable;
-        //rewardOf[_tokenAddress] -= claimable;
+        if(!status && blacklisted[user])
+        {
+             for(uint i = 0; i<whitelisted.length;i++)
+            {
+                if(IToken(whitelisted[i]).totalSupply() > 0){
+                    lastClaimedtime[whitelisted[i]][user]=block.timestamp;
+                    lastrewardpertoken[whitelisted[i]][user]= rewardpertoken[whitelisted[i]];             
+                }
+            }
+        }
+        blacklisted[user] = status;
+    }
+    function claim(address _tokenAddress) external
+    {        
+        uint256 claimable = _claimable(_tokenAddress, msg.sender);//((rewardpertoken[_tokenAddress] * IToken(_tokenAddress).balanceOf(msg.sender))/1e18)   - claimedRewards[_tokenAddress][msg.sender];
+        claimedRewards[_tokenAddress][msg.sender] += claimable;        
         totalClaimedRewardOf[_tokenAddress] += claimable;
         lastClaimedtime[_tokenAddress][msg.sender] = block.timestamp;
         payable(msg.sender).transfer(claimable);
         emit claimEV(msg.sender, _tokenAddress, claimable, block.timestamp);
     }
-    function viewClaimable(address _tokenAddress) public view returns(uint256)
+    function _claimable(address _tokenAddress, address user) internal view returns(uint256)
     {
-        require(IToken(_tokenAddress).balanceOf(msg.sender) > 0, "no tokens");
-        require(lastdistributionTime[_tokenAddress] > lastClaimedtime[_tokenAddress][msg.sender], "No amount to claim");
-        require(rewardOf[_tokenAddress] - totalClaimedRewardOf[_tokenAddress] > 0, "No reward remain") ;
-        //uint256 rewardspertoken = (rewardOf[_tokenAddress] * 1e18) / IToken(_tokenAddress).totalSupply();
-        return ((rewardpertoken[_tokenAddress] * IToken(_tokenAddress).balanceOf(msg.sender))/1e9)   - claimedRewards[_tokenAddress][msg.sender];
+        require(IToken(_tokenAddress).balanceOf(user) > 0, "no tokens");
+        require(!blacklisted[user],"User has been excluded from rewards");
+        require((lastdistributionTime[_tokenAddress] > lastClaimedtime[_tokenAddress][user]) && (rewardpertoken[_tokenAddress] - lastrewardpertoken[_tokenAddress][user] > 0), "No amount to claim");        
+        require(rewardOf[_tokenAddress] - totalClaimedRewardOf[_tokenAddress] > 0, "No reward remain") ;        
+        return (((rewardpertoken[_tokenAddress]-lastrewardpertoken[_tokenAddress][user]) * IToken(_tokenAddress).balanceOf(user))/1e9)   - claimedRewards[_tokenAddress][user];
+    }
+    function viewRewards(address _tokenAddress, address user) public view returns(uint256)
+    {
+        if(IToken(_tokenAddress).balanceOf(user) > 0 && !blacklisted[user] && 
+        (lastdistributionTime[_tokenAddress] > lastClaimedtime[_tokenAddress][user]) && 
+        ((rewardpertoken[_tokenAddress] - lastrewardpertoken[_tokenAddress][user]) > 0) &&
+        (rewardOf[_tokenAddress] - totalClaimedRewardOf[_tokenAddress] > 0))
+        {
+            return (((rewardpertoken[_tokenAddress]-lastrewardpertoken[_tokenAddress][user]) * IToken(_tokenAddress).balanceOf(user))/1e9)   - claimedRewards[_tokenAddress][user];
+        }
+        return 0;
     }
 }

@@ -161,7 +161,7 @@ abstract contract Ownable is Context {
 contract ValidatorHelper is Ownable {
 
     InterfaceValidator public valContract = InterfaceValidator(0x000000000000000000000000000000000000f000);
-    uint256 public minimumValidatorStaking = 10000  * 1e18;
+    uint256 public minimumValidatorStaking = 1000000  * 1e18;
     uint256 public lastRewardedHour = block.timestamp;
     uint256 public extraRewardsPerHour ;
     uint256 public rewardFund;
@@ -304,9 +304,11 @@ contract ValidatorHelper is Ownable {
         rewardFund -= address(this).balance;
         payable(msg.sender).transfer(address(this).balance);
     }
+
     function changeMinimumValidatorStaking(uint256 amount) external onlyOwner{
         minimumValidatorStaking = amount;
     }
+    
     function approveKYC(address validatoradd, bool status) external onlyOwner
     {
         require(userKYC[validatoradd]==KYCStatus.requested,"KYC not requested");

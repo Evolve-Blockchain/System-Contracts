@@ -117,10 +117,10 @@ contract Proposal is Params {
             votes[msg.sender][id].voteTime == 0,
             "You can't vote for a proposal twice"
         );
-        require(
+      /*  require(
             block.timestamp < proposals[id].createTime + proposalLastingPeriod,
             "Proposal expired"
-        );
+        );*/
 
         votes[msg.sender][id].voteTime = block.timestamp;
         votes[msg.sender][id].voter = msg.sender;
@@ -159,6 +159,7 @@ contract Proposal is Params {
             validators.getActiveValidators().length / 2 + 1
         ) {
             proposals[id].resultExist = true;
+            lastProposalActive[proposals[id].dst] = false;
             emit LogRejectProposal(id, proposals[id].dst, block.timestamp);
         }
 
@@ -172,7 +173,7 @@ contract Proposal is Params {
     {
         // set validator unpass
         pass[val] = false;
-        lastProposalActive[val] = true;
+        lastProposalActive[val] = false;
         emit LogSetUnpassed(val, block.timestamp);
         return true;
     }
